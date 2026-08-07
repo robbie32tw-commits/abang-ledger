@@ -282,14 +282,62 @@ main{
 #toast.on{opacity:1}
 
 /* ═══════════ 桌機 ═══════════ */
+/* ── 平板 ── */
 @media (min-width:720px){
   main{max-width:900px; padding-left:22px; padding-right:22px}
   .keypad{display:none}
   .row2{grid-template-columns:1fr 1fr 1fr}
   .kpis{grid-template-columns:repeat(4,1fr)}
   .amtbox .val{font-size:44px}
-  .two{display:grid; grid-template-columns:1fr 1fr; gap:12px; align-items:start}
-  .two .card{margin-bottom:0}
+}
+
+/* ── 桌機：導覽移到頂部、內容分欄 ── */
+@media (min-width:900px){
+  :root{--top-h:58px; --bot-h:28px}
+
+  /* 導覽從底部移到標題列右側 */
+  #topbar{justify-content:flex-start; padding:0 26px; gap:9px}
+  #botnav{
+    position:fixed; top:0; right:22px; left:auto; bottom:auto;
+    height:var(--top-h); width:auto; padding:0;
+    background:none; backdrop-filter:none; border-top:none;
+    align-items:center; gap:3px; z-index:60;
+  }
+  #botnav button{
+    flex:0 0 auto; flex-direction:row; gap:6px;
+    height:34px; padding:0 14px; border-radius:99px; font-size:13.5px;
+  }
+  #botnav button .ic{font-size:15px}
+  #botnav button.on{background:var(--accent-bg)}
+
+  main{max-width:1180px; padding-left:26px; padding-right:26px}
+
+  /* 記帳：錢包固定在左，表單在右 */
+  /* 必須帶 .on，否則 ID 選擇器會蓋掉 .page{display:none} 讓此頁永遠顯示 */
+  #page-add.on{display:grid; grid-template-columns:340px 1fr; gap:14px; align-items:start}
+  #page-add > #backupBanner{grid-column:1 / -1}
+  #page-add > .card{margin-bottom:0}
+  .amtbox .lab::after{content:'（可直接用鍵盤打字）'; color:var(--muted2); font-weight:400}
+
+  /* 分析：雙欄，總覽與警示卡橫跨整列 */
+  #statsBody{display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start}
+  #statsBody > .card{margin-bottom:0}
+  #statsBody > .card.wide{grid-column:1 / -1}
+
+  /* 流水帳與設定不需要拉滿寬 */
+  #page-list, #page-settings{max-width:880px; margin:0 auto}
+}
+
+/* ── 有滑鼠才給 hover 回饋 ── */
+@media (hover:hover){
+  .tx:hover{background:var(--card2)}
+  .wl-head:hover{background:var(--card2)}
+  .chip:hover{border-color:var(--border2)}
+  .keypad button:hover{background:var(--card2)}
+  .btn:hover, .btn-save:not(:disabled):hover, .wl-acts button:hover{filter:brightness(1.14)}
+  #botnav button:hover{color:var(--text)}
+  .mnav button:not(:disabled):hover{border-color:var(--accent); color:var(--accent)}
+  .rulerow textarea:hover{border-color:var(--border2)}
 }
 </style>
 </head>
@@ -681,10 +729,20 @@ $('#keypad').addEventListener('click', e =>{
   if(k === 'del') setAmt(entry.amt.slice(0,-1));
   else if(entry.amt.length < 9) setAmt((entry.amt === '' && k === '00') ? '' : entry.amt + k);
 });
-/* 桌機：直接鍵盤輸入金額 */
+/* 桌機：直接鍵盤輸入金額（手機靠下方數字鍵盤） */
 $('#amtVal').addEventListener('click', ()=>{
   const v = prompt('輸入金額', entry.amt);
   if(v !== null) setAmt(String(v).replace(/[^0-9]/g,''));
+});
+document.addEventListener('keydown', e =>{
+  if(!$('#page-add').classList.contains('on')) return;
+  if($('#modal').classList.contains('on')) return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if(tag === 'input' || tag === 'select' || tag === 'textarea') return;
+  if(e.metaKey || e.ctrlKey || e.altKey) return;
+  if(e.key >= '0' && e.key <= '9'){ if(entry.amt.length < 9) setAmt(entry.amt + e.key); e.preventDefault(); }
+  else if(e.key === 'Backspace'){ setAmt(entry.amt.slice(0,-1)); e.preventDefault(); }
+  else if(e.key === 'Enter' && !$('#btnSave').disabled){ $('#btnSave').click(); e.preventDefault(); }
 });
 
 $('#fDesc').addEventListener('input', ()=>{ entry.manual = false; onDescInput(); });
@@ -1065,7 +1123,7 @@ function renderStats(){
   const daily = total / elapsed;
   const proj = daily * dim;
 
-  let html = '<div class="card">' +
+  let html = '<div class="card wide">' +
     '<div class="card-t">總覽</div>' +
     '<div style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap">' +
       '<div><div class="bignum num">'+fmt(total)+'</div><div class="subnum">實際消費（已排除儲值 / 提款 / 轉帳）</div></div>' +
@@ -1090,7 +1148,7 @@ function renderStats(){
     moves.forEach(t =>{ byMove[t.category] = (byMove[t.category]||0) + t.amount; });
     /* 現金提款另外用錢包的角度解釋，不跟轉帳/還款混在一起 */
     const otherMove = Object.keys(byMove).filter(c => !UNTRACKED_CATS.includes(c) && c !== '現金提款');
-    html += '<div class="card" style="border-color:var(--warn-border); background:var(--amber-bg)">' +
+    html += '<div class="card wide" style="border-color:var(--warn-border); background:var(--amber-bg)">' +
       '<div class="card-t" style="color:var(--warn-text)">🔍 看不見的錢</div>' +
       '<div style="font-size:26px; font-weight:600" class="num">'+fmt(blindT)+'</div>' +
       '<div class="hint" style="margin-top:2px; color:var(--warn-text)">錢確實花掉了，但沒有明細可以分類</div>' +
