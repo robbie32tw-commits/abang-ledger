@@ -244,6 +244,15 @@ main{
 .empty .e1{font-size:34px; margin-bottom:10px}
 .empty .e2{font-size:13.5px; line-height:1.7}
 
+/* ═══════════ 設定：帳戶列 ═══════════ */
+.arow{display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border)}
+.arow:last-child{border-bottom:none}
+.arow .an{flex:1; font-size:14px; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.arow .acard{display:flex; align-items:center; gap:5px; font-size:12.5px; color:var(--muted); white-space:nowrap}
+.arow .acard input{width:auto; margin:0}
+.arow .ax{font-size:12px; color:var(--muted2); padding:5px 8px; border-radius:var(--r1)}
+.arow .ax:hover{color:var(--red)}
+
 /* ═══════════ 設定 ═══════════ */
 .srow{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 0; border-bottom:1px solid var(--border)}
 .srow:last-child{border-bottom:none}
@@ -350,6 +359,14 @@ main{
 <!-- ═══════════ 記帳 ═══════════ -->
 <section class="page on" id="page-add">
   <div id="backupBanner"></div>
+  <div class="card wallet" id="cardCard" style="display:none">
+    <button class="wl-head" id="ccToggle">
+      <span class="wl-l"><span class="wl-ic">💳</span>信用卡未繳</span>
+      <span class="wl-r"><b class="num" id="ccBal">$0</b><span class="wl-chev" id="ccChev">›</span></span>
+    </button>
+    <div class="wl-body" id="ccBody"></div>
+  </div>
+
   <div class="card wallet" id="walletCard">
     <button class="wl-head" id="wlToggle">
       <span class="wl-l"><span class="wl-ic">💵</span>現金錢包</span>
@@ -448,12 +465,12 @@ main{
 
   <div class="card">
     <div class="card-t">帳戶</div>
-    <div class="chips" id="acctChips" style="margin-bottom:10px"></div>
+    <div id="acctChips" style="margin-bottom:10px"></div>
     <div style="display:flex; gap:8px">
       <input type="text" id="newAcct" placeholder="新增帳戶名稱" autocomplete="off">
       <button class="btn" id="btnAddAcct">新增</button>
     </div>
-    <div class="hint" style="margin-top:8px">點帳戶可刪除（已使用的帳戶不會影響既有紀錄）</div>
+    <div class="hint" style="margin-top:8px">勾「信用卡」的帳戶會在記帳頁顯示<b>未繳金額</b>。刷卡算消費日、繳款算資金搬移，兩邊都記不會重複計算。</div>
   </div>
 
   <div class="card">
@@ -526,6 +543,7 @@ const MOVE_CATS = {
   '現金調整':   {ic:'⚖️', c:'#A8A29A'},
   '帳戶轉帳':   {ic:'🔄', c:'#A8A29A'},
   '信用卡還款': {ic:'💴', c:'#A8A29A'},
+  '信用卡調整': {ic:'⚖️', c:'#A8A29A'},
   '借貸還款':   {ic:'🤝', c:'#A8A29A'},
 };
 /* 這些搬移其實是「花掉了但沒明細」，要提醒使用者。
@@ -574,22 +592,27 @@ const DEFAULT_ACCOUNTS = ['Richart 台新','國泰776','中華郵政','遠東商
 /* ═══════════════════════════════════════════
    2. Store
 ═══════════════════════════════════════════ */
-const K = {tx:'qq_transactions', acct:'qq_accounts', rules:'qq_rules', backup:'qq_last_backup'};
+const K = {tx:'qq_transactions', acct:'qq_accounts', rules:'qq_rules', backup:'qq_last_backup', cards:'qq_cards'};
 const BACKUP_DAYS = 14;   /* 超過這麼多天沒匯出就提醒 */
 const store = {
-  tx:[], accounts:[], rules:{},
+  tx:[], accounts:[], rules:{}, cards:[],
   load(){
     try{ this.tx = JSON.parse(localStorage.getItem(K.tx)) || []; }catch(e){ this.tx = []; }
     try{ this.accounts = JSON.parse(localStorage.getItem(K.acct)) || DEFAULT_ACCOUNTS.slice(); }catch(e){ this.accounts = DEFAULT_ACCOUNTS.slice(); }
     try{ this.rules = JSON.parse(localStorage.getItem(K.rules)) || clone(DEFAULT_RULES); }catch(e){ this.rules = clone(DEFAULT_RULES); }
+    try{ this.cards = JSON.parse(localStorage.getItem(K.cards)); }catch(e){ this.cards = null; }
+    /* 沒設定過就從帳戶名稱猜，使用者可在設定頁改 */
+    if(!Array.isArray(this.cards)) this.cards = guessCards(this.accounts);
     this.sort();
   },
   sort(){ this.tx.sort((a,b)=> a.date === b.date ? b.id - a.id : (a.date < b.date ? 1 : -1)); },
   save(){ this.sort(); localStorage.setItem(K.tx, JSON.stringify(this.tx)); },
   saveAcct(){ localStorage.setItem(K.acct, JSON.stringify(this.accounts)); },
   saveRules(){ localStorage.setItem(K.rules, JSON.stringify(this.rules)); },
+  saveCards(){ localStorage.setItem(K.cards, JSON.stringify(this.cards)); },
 };
 function clone(o){ return JSON.parse(JSON.stringify(o)); }
+function guessCards(accts){ return (accts||[]).filter(a => a.includes('信用卡') || a.includes('卡費')); }
 
 /* ═══════════════════════════════════════════
    3. 分類判斷
@@ -661,6 +684,27 @@ function lastCount(){
   return c.slice().sort((a,b)=> a.date === b.date ? b.id - a.id : (a.date < b.date ? 1 : -1))[0];
 }
 
+/* ═══════════ 信用卡未繳 ═══════════
+   跟現金錢包相反：錢包看「還剩多少」，信用卡看「還欠多少」。
+   刷卡記在消費日（計入當月消費），繳款只是還錢（不計入消費）—— 兩者都不重複計算。 */
+function isCard(a){ return !!a && store.cards.includes(a); }
+function cardDelta(t){
+  if(!isCard(t.account)) return 0;
+  if(t.type === 'expense') return t.amount;                                  // 刷卡 → 欠更多
+  if(t.type === 'refund') return -t.amount;                                  // 退款 → 欠更少
+  if(t.type === 'transfer' && t.category === '信用卡還款') return -t.amount;   // 繳款
+  if(t.type === 'transfer' && t.category === '信用卡調整') return t.cardDir === 'up' ? t.amount : -t.amount;
+  return 0;
+}
+function cardOwed(name){ return store.tx.reduce((s,t)=> s + (t.account === name ? cardDelta(t) : 0), 0); }
+function cardTotal(){ return store.cards.reduce((s,c)=> s + cardOwed(c), 0); }
+function cardTx(name){ return store.tx.filter(t => t.account === name && cardDelta(t) !== 0); }
+function lastCardCheck(name){
+  const c = store.tx.filter(t => t.cardCheck && t.account === name);
+  if(!c.length) return null;
+  return c.slice().sort((a,b)=> a.date === b.date ? b.id - a.id : (a.date < b.date ? 1 : -1))[0];
+}
+
 /* 消費分析用的支出：排除資金搬移 */
 /* 退款是「原本那筆花費沒發生」，不是收入 —— 從所屬分類扣掉。
    找不到原扣款可沖銷的退款請記成收入的「退款」分類，不要用 refund。 */
@@ -686,7 +730,7 @@ function go(p){
   if(p === 'list') renderList();
   if(p === 'stats') renderStats();
   if(p === 'settings') renderSettings();
-  if(p === 'add'){ renderToday(); renderWallet(); renderBackupBanner(); }
+  if(p === 'add'){ renderToday(); renderWallet(); renderCards(); renderBackupBanner(); }
 }
 
 /* ═══════════════════════════════════════════
@@ -821,7 +865,7 @@ function resetEntry(){
   if(entry.autoMoved){ setType('expense'); entry.autoMoved = false; }
   $('#fFixed').checked = false; delete $('#fFixed').dataset.touched;
   $('#autoTag').innerHTML = '';
-  renderCatChips(); renderWarn(); updateSave(); renderToday(); renderWallet(); renderBackupBanner();
+  renderCatChips(); renderWarn(); updateSave(); renderToday(); renderWallet(); renderCards(); renderBackupBanner();
 }
 
 function renderToday(){
@@ -857,6 +901,127 @@ function renderBackupBanner(){
     '<button id="bkNow">立即備份</button><button class="bx" id="bkLater">✕</button></div>';
   $('#bkNow').onclick = ()=>{ doExport(); };
   $('#bkLater').onclick = ()=>{ bkDismissed = true; renderBackupBanner(); };
+}
+
+/* ═══════════ 信用卡 UI ═══════════ */
+let ccOpen = false;
+$('#ccToggle').addEventListener('click', ()=>{
+  ccOpen = !ccOpen;
+  $('#ccBody').classList.toggle('open', ccOpen);
+  $('#ccChev').classList.toggle('open', ccOpen);
+  renderCards();
+});
+
+function renderCards(){
+  const box = $('#cardCard');
+  if(!store.cards.length){ box.style.display = 'none'; return; }
+  box.style.display = '';
+  const owed = cardTotal();
+  $('#ccBal').textContent = fmt(owed);
+  $('#ccBal').style.color = owed > 0 ? 'var(--red)' : 'var(--muted)';
+  if(!ccOpen) return;
+
+  const m = today().slice(0,7);
+  const swiped = store.tx.filter(t => t.type === 'expense' && isCard(t.account) && ym(t.date) === m);
+  const paid = store.tx.filter(t => t.type === 'transfer' && t.category === '信用卡還款' && isCard(t.account) && ym(t.date) === m);
+  const never = !store.tx.some(t => t.cardCheck);
+
+  let h = '';
+  if(never){
+    h += '<div class="wl-warn">💡 <b>還沒對過帳。</b>未繳金額是用「刷卡總額 − 繳款總額」推算的，只要有一次繳款忘了記，這個數字就會偏高。按「對帳」輸入帳單上的實際未繳金額就會校正。</div>';
+  } else if(owed < 0){
+    h += '<div class="wl-warn">⚠️ <b>算出來是負的</b> —— 表示繳款記得比刷卡多，可能有刷卡漏記。對帳一次就會修正。</div>';
+  }
+  h += '<div class="wl-stats">' +
+    '<div class="s"><div class="k">本月刷卡</div><div class="v num" style="color:var(--red)">'+fmt(sum(swiped))+'</div></div>' +
+    '<div class="s"><div class="k">本月已繳</div><div class="v num">'+fmt(sum(paid))+'</div></div></div>';
+  h += '<div class="wl-acts"><button class="p" id="ccPay">記一筆繳款</button><button id="ccCheck">對帳</button></div>';
+
+  if(store.cards.length > 1){
+    h += '<div class="wl-list">' + store.cards.map(c =>{
+      const lc = lastCardCheck(c);
+      return '<div class="r"><span class="n">'+esc(c)+(lc?' <span class="d">· 對帳 '+lc.date+'</span>':'')+'</span>' +
+        '<span class="a num" style="color:'+(cardOwed(c)>0?'var(--red)':'var(--muted)')+'">'+fmt(cardOwed(c))+'</span></div>';
+    }).join('') + '</div>';
+  }
+  const recent = store.cards.flatMap(c => cardTx(c)).sort((a,b)=> a.date === b.date ? b.id - a.id : (a.date < b.date ? 1 : -1)).slice(0,6);
+  if(recent.length){
+    h += '<div class="wl-list">' + recent.map(t =>{
+      const dv = cardDelta(t);
+      return '<div class="r"><span class="d num">'+t.date.slice(5)+'</span><span class="n">'+esc(t.desc || t.category)+'</span>' +
+        '<span class="a num" style="color:'+(dv>0?'var(--text)':'var(--accent)')+'">'+(dv>0?'+':'−')+fmt(Math.abs(dv))+'</span></div>';
+    }).join('') + '</div>';
+  }
+  h += '<div class="hint" style="margin-top:10px">刷卡消費記在<b>消費日</b>（算當月花費），繳卡費記成<b>信用卡還款</b>（只是還錢，不算消費）。兩邊都記也不會重複計算。</div>';
+  $('#ccBody').innerHTML = h;
+  $('#ccPay').onclick = openCardPay;
+  $('#ccCheck').onclick = openCardCheck;
+}
+
+function cardPicker(id){
+  return store.cards.length > 1
+    ? '<div class="field"><label>哪張卡</label><select id="'+id+'">'+store.cards.map(c => '<option>'+esc(c)+'</option>').join('')+'</select></div>'
+    : '<input type="hidden" id="'+id+'" value="'+esc(store.cards[0] || '')+'">';
+}
+
+function openCardPay(){
+  $('#sheet').innerHTML =
+    '<div class="sh"><h3>記一筆繳卡費</h3><button class="btn" id="mClose">關閉</button></div>' +
+    '<div class="hint">從銀行帳戶繳信用卡帳單。這是還錢不是消費，不會計入當月花費。</div>' +
+    cardPicker('cpCard') +
+    '<div class="field"><label>繳款金額</label><input type="number" id="cpAmt" inputmode="numeric"></div>' +
+    '<div class="field"><label>日期</label><input type="date" id="cpDate" value="'+today()+'"></div>' +
+    '<button class="btn p" id="cpSave" style="width:100%; padding:14px; margin-top:14px">儲存</button>';
+  $('#modal').classList.add('on');
+  $('#mClose').onclick = closeModal;
+  $('#cpSave').onclick = ()=>{
+    const v = Number($('#cpAmt').value);
+    if(!(v > 0)){ alert('請填金額'); return; }
+    const card = $('#cpCard').value;
+    store.tx.push({id:Date.now(), date:$('#cpDate').value || today(), type:'transfer', category:'信用卡還款',
+      desc:'繳 ' + card, amount:v, account:card,
+      excluded:true, fixed:false, manual:true, ambiguous:false});
+    store.save(); closeModal(); renderCards(); renderToday(); toast('已記錄繳款 ' + fmt(v));
+  };
+}
+
+function openCardCheck(){
+  $('#sheet').innerHTML =
+    '<div class="sh"><h3>信用卡對帳</h3><button class="btn" id="mClose">關閉</button></div>' +
+    '<div class="hint">打開網銀或帳單，把目前的<b>未繳總額</b>填進來。系統會補一筆調整，讓推算值等於實際值。</div>' +
+    cardPicker('chCard') +
+    '<div class="field"><label>目前推算未繳</label><div class="num" id="chCalc" style="font-size:26px; font-weight:600">—</div></div>' +
+    '<div class="field"><label>帳單上的實際未繳</label><input type="number" id="chActual" inputmode="numeric"></div>' +
+    '<div class="field"><label>日期</label><input type="date" id="chDate" value="'+today()+'"></div>' +
+    '<div id="chPreview"></div>' +
+    '<button class="btn p" id="chSave" style="width:100%; padding:14px; margin-top:14px">確認對帳</button>';
+  $('#modal').classList.add('on');
+  $('#mClose').onclick = closeModal;
+  const calc = ()=> cardOwed($('#chCard').value);
+  const show = ()=>{
+    $('#chCalc').textContent = fmt(calc());
+    const a = $('#chActual').value;
+    if(a === ''){ $('#chPreview').innerHTML = ''; return; }
+    const diff = Number(a) - calc();
+    let msg;
+    if(diff === 0) msg = '完全對得上 ✓ 不會產生調整紀錄。';
+    else if(diff < 0) msg = '推算比實際多 <b>'+fmt(-diff)+'</b> —— 通常是<b>繳款忘了記</b>。會補一筆調整把欠款調降，不影響消費統計。';
+    else msg = '推算比實際少 <b>'+fmt(diff)+'</b> —— 通常是<b>刷卡忘了記</b>。會補一筆調整把欠款調升。注意這筆<b>不會</b>計入消費分類，因為不知道買了什麼。';
+    $('#chPreview').innerHTML = '<div class="wl-warn">'+msg+'</div>';
+  };
+  show();
+  $('#chActual').addEventListener('input', show);
+  if(store.cards.length > 1) $('#chCard').addEventListener('change', show);
+  $('#chSave').onclick = ()=>{
+    const a = $('#chActual').value;
+    if(a === ''){ alert('請填帳單上的未繳金額'); return; }
+    const card = $('#chCard').value, diff = Number(a) - cardOwed(card);
+    store.tx.push({id:Date.now(), date:$('#chDate').value || today(), type:'transfer', category:'信用卡調整',
+      cardDir: diff >= 0 ? 'up' : 'down', amount:Math.abs(diff),
+      desc:'信用卡對帳' + (diff ? (diff > 0 ? '（調升）' : '（調降）') : '（相符）'),
+      account:card, cardCheck:true, excluded:true, fixed:false, manual:true, ambiguous:false});
+    store.save(); closeModal(); renderCards(); toast('對帳完成，未繳 ' + fmt(Number(a)));
+  };
 }
 
 /* ═══════════ 現金錢包 UI ═══════════ */
@@ -1080,7 +1245,7 @@ function openEdit(id){
   $('#eDel').onclick = ()=>{
     if(!confirm('確定刪除這筆紀錄？')) return;
     store.tx = store.tx.filter(x => x.id !== id); store.save();
-    closeModal(); renderList(); renderWallet(); toast('已刪除');
+    closeModal(); renderList(); renderWallet(); renderCards(); toast('已刪除');
   };
   $('#eSave').onclick = ()=>{
     t.desc = $('#eDesc').value.trim();
@@ -1093,7 +1258,7 @@ function openEdit(id){
     t.excluded = $('#eExcl').checked;
     t.manual = true;
     t.ambiguous = false;
-    store.save(); closeModal(); renderList(); renderWallet(); toast('已更新');
+    store.save(); closeModal(); renderList(); renderWallet(); renderCards(); toast('已更新');
   };
 }
 function closeModal(){ $('#modal').classList.remove('on'); }
@@ -1307,11 +1472,22 @@ function renderSettings(){
   else if(days === 0) st += '今天已備份 ✓';
   else st += '上次備份 ' + last + '（' + days + ' 天前）' + (days >= BACKUP_DAYS ? ' ⚠️' : '');
   $('#expDesc').textContent = st;
-  $('#acctChips').innerHTML = store.accounts.map(a => '<button class="chip" data-a="'+esc(a)+'">'+esc(a)+' ×</button>').join('');
-  $$('#acctChips .chip').forEach(b => b.addEventListener('click', ()=>{
+  $('#acctChips').innerHTML = store.accounts.map(a =>
+    '<div class="arow"><span class="an">'+esc(a)+'</span>' +
+    '<label class="acard"><input type="checkbox" data-c="'+esc(a)+'"'+(isCard(a)?' checked':'')+'> 信用卡</label>' +
+    '<button class="ax" data-a="'+esc(a)+'">刪除</button></div>').join('');
+  $$('#acctChips input[data-c]').forEach(b => b.addEventListener('change', ()=>{
+    const a = b.dataset.c;
+    store.cards = b.checked ? store.cards.concat([a]).filter((v,i,x)=>x.indexOf(v)===i)
+                            : store.cards.filter(x => x !== a);
+    store.saveCards(); renderCards();
+    toast(b.checked ? '「'+a+'」已標記為信用卡' : '「'+a+'」已取消信用卡');
+  }));
+  $$('#acctChips .ax').forEach(b => b.addEventListener('click', ()=>{
     if(!confirm('刪除帳戶「'+b.dataset.a+'」？既有紀錄不受影響。')) return;
     store.accounts = store.accounts.filter(x => x !== b.dataset.a);
-    store.saveAcct(); renderSettings(); renderAccounts();
+    store.cards = store.cards.filter(x => x !== b.dataset.a);
+    store.saveAcct(); store.saveCards(); renderSettings(); renderAccounts(); renderCards();
   }));
   $('#ruleBox').innerHTML = Object.keys(store.rules).map(c =>
     '<div class="rulerow"><div class="rn">'+catMeta(c).ic+' '+c+'</div>' +
@@ -1373,6 +1549,7 @@ function doExport(){
     qq_transactions: store.tx,
     qq_accounts: store.accounts,
     qq_rules: store.rules,
+    qq_cards: store.cards,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const a = document.createElement('a');
@@ -1422,7 +1599,7 @@ function importIncome(rows, pnlCount){
     added++;
   });
   store.save();
-  renderAccounts(); renderWallet(); renderBackupBanner();
+  renderAccounts(); renderWallet(); renderCards(); renderBackupBanner();
   const ms = allMonths(); if(ms.length) statM = ms[0];
   let msg = '已加入 ' + added + ' 筆收入';
   if(dup) msg += '（' + dup + ' 筆重複略過）';
@@ -1454,6 +1631,8 @@ function doImport(data){
     if(!confirm('匯入 ' + raw.length + ' 筆（阿邦記帳2 備份格式）？將取代目前資料。')) return;
     store.tx = raw;
     if(data.qq_accounts) { store.accounts = data.qq_accounts; store.saveAcct(); }
+    store.cards = Array.isArray(data.qq_cards) ? data.qq_cards : guessCards(store.accounts);
+    store.saveCards();
     if(data.qq_rules) { store.rules = data.qq_rules; store.saveRules(); }
     store.save(); afterImport(raw.length, 0, 0, 0);
     return;
@@ -1513,6 +1692,7 @@ function doImport(data){
   const accts = new Set(store.accounts);
   out.forEach(t =>{ if(t.account) accts.add(t.account); });
   store.accounts = Array.from(accts); store.saveAcct();
+  store.cards = guessCards(store.accounts); store.saveCards();
 
   afterImport(out.length, reclassed, moved, amb);
 }
@@ -1545,6 +1725,7 @@ renderCatChips();
 updateSave();
 renderToday();
 renderWallet();
+renderCards();
 renderBackupBanner();
 const _ms = allMonths();
 if(_ms.length && !_ms.includes(statM)) statM = _ms[0];
