@@ -98,6 +98,16 @@ main{
 .card-t{font-size:12px; font-weight:600; color:var(--muted); letter-spacing:.06em; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between}
 .hint{font-size:12px; color:var(--muted); line-height:1.55}
 
+/* ═══════════ 備份提醒 ═══════════ */
+.bkbar{display:flex; align-items:center; gap:11px; padding:12px 14px; margin-bottom:12px;
+  border-radius:var(--r3); background:var(--amber-bg); border:1px solid var(--warn-border)}
+.bkbar .bi{font-size:18px; flex-shrink:0}
+.bkbar .bt{flex:1; font-size:12.5px; line-height:1.5; color:var(--warn-text)}
+.bkbar .bt b{font-weight:600}
+.bkbar button{flex-shrink:0; padding:8px 13px; border-radius:var(--r2); font-size:12.5px; font-weight:600;
+  background:var(--amber); color:#20180A; border:none}
+.bkbar .bx{background:none; color:var(--warn-text); padding:8px 4px; font-size:16px; font-weight:400; opacity:.7}
+
 /* ═══════════ 現金錢包卡 ═══════════ */
 .wallet{padding:0; overflow:hidden}
 .wl-head{width:100%; display:flex; align-items:center; justify-content:space-between; padding:14px 16px; text-align:left}
@@ -291,6 +301,7 @@ main{
 
 <!-- ═══════════ 記帳 ═══════════ -->
 <section class="page on" id="page-add">
+  <div id="backupBanner"></div>
   <div class="card wallet" id="walletCard">
     <button class="wl-head" id="wlToggle">
       <span class="wl-l"><span class="wl-ic">💵</span>現金錢包</span>
@@ -511,7 +522,8 @@ const DEFAULT_ACCOUNTS = ['Richart 台新','國泰776','中華郵政','遠東商
 /* ═══════════════════════════════════════════
    2. Store
 ═══════════════════════════════════════════ */
-const K = {tx:'qq_transactions', acct:'qq_accounts', rules:'qq_rules'};
+const K = {tx:'qq_transactions', acct:'qq_accounts', rules:'qq_rules', backup:'qq_last_backup'};
+const BACKUP_DAYS = 14;   /* 超過這麼多天沒匯出就提醒 */
 const store = {
   tx:[], accounts:[], rules:{},
   load(){
@@ -617,7 +629,7 @@ function go(p){
   if(p === 'list') renderList();
   if(p === 'stats') renderStats();
   if(p === 'settings') renderSettings();
-  if(p === 'add'){ renderToday(); renderWallet(); }
+  if(p === 'add'){ renderToday(); renderWallet(); renderBackupBanner(); }
 }
 
 /* ═══════════════════════════════════════════
@@ -742,7 +754,7 @@ function resetEntry(){
   if(entry.autoMoved){ setType('expense'); entry.autoMoved = false; }
   $('#fFixed').checked = false; delete $('#fFixed').dataset.touched;
   $('#autoTag').innerHTML = '';
-  renderCatChips(); renderWarn(); updateSave(); renderToday(); renderWallet();
+  renderCatChips(); renderWarn(); updateSave(); renderToday(); renderWallet(); renderBackupBanner();
 }
 
 function renderToday(){
@@ -754,6 +766,31 @@ function renderToday(){
     : (d === today() ? '今天' : d) + ' 還沒有紀錄';
 }
 $('#fDate').addEventListener('change', renderToday);
+
+/* ═══════════ 備份提醒 ═══════════ */
+function lastBackup(){ return localStorage.getItem(K.backup) || null; }
+function daysSince(d){
+  if(!d) return null;
+  return Math.floor((new Date(today()) - new Date(d)) / 86400000);
+}
+let bkDismissed = false;
+function renderBackupBanner(){
+  const el = $('#backupBanner');
+  if(!el) return;
+  const n = store.tx.length;
+  const last = lastBackup(), days = daysSince(last);
+  /* 沒資料、剛備份過、或這次開啟已關掉提醒就不顯示 */
+  const overdue = n >= 10 && !bkDismissed && (last === null || days >= BACKUP_DAYS);
+  if(!overdue){ el.innerHTML = ''; return; }
+  const msg = last === null
+    ? '你已經記了 <b>' + n + '</b> 筆，但<b>從來沒有備份過</b>。資料只存在這台裝置，清瀏覽器資料就沒了。'
+    : '距離上次備份已經 <b>' + days + ' 天</b>了（' + last + '）。';
+  el.innerHTML = '<div class="bkbar"><span class="bi">💾</span>' +
+    '<span class="bt">' + msg + '</span>' +
+    '<button id="bkNow">立即備份</button><button class="bx" id="bkLater">✕</button></div>';
+  $('#bkNow').onclick = ()=>{ doExport(); };
+  $('#bkLater').onclick = ()=>{ bkDismissed = true; renderBackupBanner(); };
+}
 
 /* ═══════════ 現金錢包 UI ═══════════ */
 let wlOpen = false;
@@ -889,13 +926,16 @@ function renderList(){
   if(curM) $('#lMonth').value = curM;
 
   const curC = $('#lCat').value;
-  $('#lCat').innerHTML = '<option value="">全部分類</option>' + Object.keys(ALL_CATS).map(c => '<option value="'+c+'">'+ALL_CATS[c].ic+' '+c+'</option>').join('');
+  const todoN = store.tx.filter(t => t.ambiguous).length;
+  $('#lCat').innerHTML = '<option value="">全部分類</option>' +
+    (todoN ? '<option value="__todo__">⚠️ 待補分類（'+todoN+'）</option>' : '') +
+    Object.keys(ALL_CATS).map(c => '<option value="'+c+'">'+ALL_CATS[c].ic+' '+c+'</option>').join('');
   if(curC) $('#lCat').value = curC;
 
   const q = $('#lSearch').value.trim().toLowerCase();
   let list = store.tx.filter(t =>
     (!curM || ym(t.date) === curM) &&
-    (!curC || t.category === curC) &&
+    (!curC || (curC === '__todo__' ? !!t.ambiguous : t.category === curC)) &&
     (!q || (t.desc||'').toLowerCase().includes(q))
   );
 
@@ -908,7 +948,12 @@ function renderList(){
   const groups = {};
   list.forEach(t =>{ const m = ym(t.date); (groups[m] = groups[m] || []).push(t); });
 
-  $('#listBody').innerHTML = Object.keys(groups).sort().reverse().map(m =>{
+  const todoTip = curC === '__todo__'
+    ? '<div class="card" style="background:var(--amber-bg); border-color:var(--warn-border); padding:12px 14px">' +
+      '<div class="hint" style="color:var(--warn-text)">這些紀錄只寫了支付工具，看不出買了什麼。' +
+      '點任一筆改成正確分類（順便把店家補清楚），就會計入分類統計。</div></div>' : '';
+
+  $('#listBody').innerHTML = todoTip + Object.keys(groups).sort().reverse().map(m =>{
     const g = groups[m];
     const exp = sum(realExpenses(g));
     return '<div class="mgroup"><div class="mgroup-h"><span>'+ymLabel(m)+'</span><span class="num">消費 '+fmt(exp)+' · '+g.length+' 筆</span></div>' +
@@ -1187,7 +1232,12 @@ function lineSVG(labels, vals){
    9. 設定頁
 ═══════════════════════════════════════════ */
 function renderSettings(){
-  $('#expDesc').textContent = '目前共 ' + store.tx.length + ' 筆紀錄';
+  const last = lastBackup(), days = daysSince(last);
+  let st = '目前共 ' + store.tx.length + ' 筆紀錄 · ';
+  if(last === null) st += '⚠️ 從未備份';
+  else if(days === 0) st += '今天已備份 ✓';
+  else st += '上次備份 ' + last + '（' + days + ' 天前）' + (days >= BACKUP_DAYS ? ' ⚠️' : '');
+  $('#expDesc').textContent = st;
   $('#acctChips').innerHTML = store.accounts.map(a => '<button class="chip" data-a="'+esc(a)+'">'+esc(a)+' ×</button>').join('');
   $$('#acctChips .chip').forEach(b => b.addEventListener('click', ()=>{
     if(!confirm('刪除帳戶「'+b.dataset.a+'」？既有紀錄不受影響。')) return;
@@ -1247,7 +1297,8 @@ function applyClassification(t){
 }
 
 /* ── 匯出 ── */
-$('#btnExport').addEventListener('click', ()=>{
+$('#btnExport').addEventListener('click', doExport);
+function doExport(){
   const data = {
     _meta:{app:'阿邦記帳2', version:1, exported:today(), count:store.tx.length},
     qq_transactions: store.tx,
@@ -1260,8 +1311,11 @@ $('#btnExport').addEventListener('click', ()=>{
   a.download = '阿邦記帳2_備份_' + today() + '.json';
   a.click();
   setTimeout(()=> URL.revokeObjectURL(a.href), 1000);
+  localStorage.setItem(K.backup, today());
+  bkDismissed = false;
+  renderBackupBanner(); renderSettings();
   toast('已匯出 ' + store.tx.length + ' 筆');
-});
+}
 
 /* ── 匯入 ── */
 $('#btnImport').addEventListener('click', ()=> $('#fileInput').click());
@@ -1276,10 +1330,54 @@ $('#fileInput').addEventListener('change', e =>{
   rd.readAsText(f);
 });
 
+const INCOME_MAP = {salary:'薪資', freelance:'兼職', bonus:'獎金', investment:'投資收益',
+                    invest:'投資收益', other:'其他收入'};
+
+/* 泓金龜改版後的備份只有 hj_income（收入）與 hj_pnl_records（投資損益），
+   沒有 hj_transactions。收入可以併進來；投資損益是已實現損益不是消費，
+   386 筆倒進流水帳只會淹掉記帳，所以略過並告知。 */
+function importIncome(rows, pnlCount){
+  const exist = new Set(store.tx.map(t => t.id));
+  let added = 0, dup = 0;
+  rows.forEach((r, i) =>{
+    let id = r.id || (Date.now() + i);
+    if(exist.has(id)){ dup++; return; }
+    exist.add(id);
+    store.tx.push({
+      id, date: r.date || today(), type:'income',
+      category: INCOME_MAP[r.category] || '其他收入',
+      desc: [r.source, r.note].filter(Boolean).join(' ').trim() || '收入',
+      amount: Number(r.amount) || 0, account: r.account || '',
+      fixed:false, excluded:false, manual:true, ambiguous:false,
+    });
+    added++;
+  });
+  store.save();
+  renderAccounts(); renderWallet(); renderBackupBanner();
+  const ms = allMonths(); if(ms.length) statM = ms[0];
+  let msg = '已加入 ' + added + ' 筆收入';
+  if(dup) msg += '（' + dup + ' 筆重複略過）';
+  toast(msg);
+  go('stats');
+}
+
 function doImport(data){
   const own = data.qq_transactions;
   const legacy = data.hj_transactions;
   const raw = own || legacy || (Array.isArray(data) ? data : null);
+
+  /* 只有收入的泓金龜新版備份 —— 用「加入」而不是「取代」，
+     否則會把既有的支出紀錄整批洗掉 */
+  if(!raw && Array.isArray(data.hj_income) && data.hj_income.length){
+    const inc = data.hj_income, pnl = (data.hj_pnl_records || []).length;
+    const total = inc.reduce((a,r)=> a + (Number(r.amount)||0), 0);
+    if(!confirm('這份備份沒有支出紀錄，只有 ' + inc.length + ' 筆收入（合計 ' + fmt(total) + '）。\n\n' +
+      '要把這些收入「加入」目前資料嗎？（不會覆蓋既有紀錄）' +
+      (pnl ? '\n\n另有 ' + pnl + ' 筆投資損益會略過 —— 那是已實現損益，不是消費，倒進流水帳會淹掉記帳。' : ''))) return;
+    importIncome(inc, pnl);
+    return;
+  }
+
   if(!raw || !raw.length){ alert('找不到可匯入的紀錄'); return; }
 
   if(own){
@@ -1378,6 +1476,7 @@ renderCatChips();
 updateSave();
 renderToday();
 renderWallet();
+renderBackupBanner();
 const _ms = allMonths();
 if(_ms.length && !_ms.includes(statM)) statM = _ms[0];
 </script>
