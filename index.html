@@ -499,6 +499,26 @@ main{
   </div>
 
   <div class="card">
+    <div class="card-t">雲端同步（GitHub Gist）</div>
+    <div class="hint">用你自己的 <b>私密 Gist</b> 當儲存空間，在手機與電腦之間同步。資料只在你的瀏覽器與你的 GitHub 帳號之間往返，不經過任何第三方。</div>
+    <div class="field"><label>存取權杖（Personal Access Token）</label>
+      <input type="password" id="gTok" placeholder="ghp_… 只需勾 gist 權限" autocomplete="off"></div>
+    <div class="field"><label>Gist ID（第一次留白，按「建立新 Gist」）</label>
+      <input type="text" id="gId" placeholder="留白會自動建立" autocomplete="off"></div>
+    <div class="wl-acts" style="margin-top:12px">
+      <button class="p" id="gPush">推上去</button>
+      <button id="gPull">拉下來</button>
+    </div>
+    <button class="btn" id="gInfo" style="width:100%; margin-top:8px">查看雲端狀態</button>
+    <div id="gOut"></div>
+    <div class="hint" style="margin-top:10px">
+      權杖會存在<b>這台裝置的瀏覽器</b>裡，不會上傳。請到 GitHub → Settings → Developer settings → Personal access tokens →
+      <b>Tokens (classic)</b> 建立，權限<b>只勾 <code>gist</code></b> 這一項就好。<br><br>
+      同步是<b>明確的推 / 拉</b>，不會自動合併 —— 兩邊都改過的話，後推的會蓋掉先推的。動作前先按「查看雲端狀態」比對筆數與時間。
+    </div>
+  </div>
+
+  <div class="card">
     <div class="card-t">帳戶</div>
     <div id="acctChips" style="margin-bottom:10px"></div>
     <div style="display:flex; gap:8px">
@@ -628,7 +648,7 @@ const DEFAULT_ACCOUNTS = ['Richart 台新','國泰776','中華郵政','遠東商
 /* ═══════════════════════════════════════════
    2. Store
 ═══════════════════════════════════════════ */
-const K = {tx:'qq_transactions', acct:'qq_accounts', rules:'qq_rules', backup:'qq_last_backup', cards:'qq_cards', recon:'qq_recons'};
+const K = {tx:'qq_transactions', acct:'qq_accounts', rules:'qq_rules', backup:'qq_last_backup', cards:'qq_cards', recon:'qq_recons', gtok:'qq_gist_token', gid:'qq_gist_id'};
 const BACKUP_DAYS = 14;   /* 超過這麼多天沒匯出就提醒 */
 const store = {
   tx:[], accounts:[], rules:{}, cards:[], recons:[],
@@ -1579,6 +1599,10 @@ function renderSettings(){
     store.cards = store.cards.filter(x => x !== b.dataset.a);
     store.saveAcct(); store.saveCards(); renderSettings(); renderAccounts(); renderCards();
   }));
+  $('#gTok').value = gTok(); $('#gId').value = gId();
+  $('#gPush').onclick = gistPush;
+  $('#gPull').onclick = gistPull;
+  $('#gInfo').onclick = gistInfo;
   $('#ruleBox').innerHTML = Object.keys(store.rules).map(c =>
     '<div class="rulerow"><div class="rn">'+catMeta(c).ic+' '+c+'</div>' +
     '<textarea data-c="'+c+'">'+esc(store.rules[c].join('  '))+'</textarea></div>').join('');
@@ -1631,16 +1655,121 @@ function applyClassification(t){
   return before !== (t.category + '|' + t.excluded);
 }
 
+/* ═══════════ 雲端同步（GitHub Gist）═══════════
+   刻意做成明確的「推 / 拉」而不是自動合併：紀錄沒有逐筆修改時間，
+   也偵測不到刪除，硬合併只會製造幽靈資料。 */
+const GIST_FILE = 'abang-ledger.json';
+function gTok(){ return (localStorage.getItem(K.gtok) || '').trim(); }
+function gId(){ return (localStorage.getItem(K.gid) || '').trim(); }
+function gOut(msg, kind){
+  $('#gOut').innerHTML = msg ? '<div class="wl-warn" style="'+(kind==='ok'?'background:var(--accent-bg); border-color:var(--accent); color:var(--accent)':'')+'">'+msg+'</div>' : '';
+}
+async function gApi(path, opts){
+  const r = await fetch('https://api.github.com' + path, Object.assign({
+    headers:{'Authorization':'Bearer ' + gTok(), 'Accept':'application/vnd.github+json'}
+  }, opts || {}));
+  if(!r.ok){
+    const known = {401:'權杖無效或已過期', 403:'權限不足或被限流 —— 請確認權杖有勾 gist', 404:'找不到這個 Gist，或權杖沒有 gist 權限', 422:'內容不符合 Gist 格式'}[r.status];
+    let detail = '';
+    if(!known){ const txt = await r.text().catch(()=> ''); detail = ' ' + txt.slice(0,100); }
+    throw new Error('GitHub 回應 ' + r.status + (known ? '：' + known : '') + detail);
+  }
+  return r.json();
+}
+function saveGistFields(){
+  localStorage.setItem(K.gtok, $('#gTok').value.trim());
+  localStorage.setItem(K.gid, $('#gId').value.trim());
+}
+function needTok(){
+  if(gTok()) return false;
+  gOut('請先填入存取權杖。'); return true;
+}
+
+async function gistPush(){
+  saveGistFields(); if(needTok()) return;
+  gOut('上傳中…');
+  try{
+    const body = {files:{[GIST_FILE]:{content: JSON.stringify(buildBackup())}}};
+    let res;
+    if(gId()){
+      res = await gApi('/gists/' + gId(), {method:'PATCH', body:JSON.stringify(body)});
+    } else {
+      body.public = false; body.description = '阿邦記帳2 資料（私密）';
+      res = await gApi('/gists', {method:'POST', body:JSON.stringify(body)});
+      localStorage.setItem(K.gid, res.id); $('#gId').value = res.id;
+    }
+    localStorage.setItem(K.backup, today()); bkDismissed = false;
+    renderBackupBanner(); 
+    gOut('✅ 已上傳 <b>' + store.tx.length + '</b> 筆到 Gist <code>' + res.id + '</code>' +
+         (res.public ? '<br>⚠️ 這個 Gist 是公開的，請到 GitHub 刪掉重建。' : '（私密）'), 'ok');
+    toast('已同步到雲端');
+  }catch(e){ gOut('❌ ' + e.message); }
+}
+
+async function gistPull(){
+  saveGistFields(); if(needTok()) return;
+  if(!gId()){ gOut('請填 Gist ID，或先按「推上去」建立一個。'); return; }
+  gOut('下載中…');
+  try{
+    const res = await gApi('/gists/' + gId());
+    const f = res.files && res.files[GIST_FILE];
+    if(!f){ gOut('❌ 這個 Gist 裡沒有 ' + GIST_FILE); return; }
+    const content = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
+    const data = JSON.parse(content);
+    const n = (data.qq_transactions || []).length;
+    if(!confirm('雲端有 ' + n + ' 筆（存於 ' + (data._meta && data._meta.exported || '未知') + '）。\n' +
+                '目前這台裝置有 ' + store.tx.length + ' 筆。\n\n拉下來會「取代」本機資料，確定嗎？')) { gOut(''); return; }
+    applyBackup(data);
+    renderAccounts(); renderWallet(); renderCards(); renderBackupBanner(); renderSettings();
+    const ms = allMonths(); if(ms.length) statM = ms[0];
+    gOut('✅ 已從雲端還原 <b>' + store.tx.length + '</b> 筆', 'ok');
+    toast('已從雲端還原');
+  }catch(e){ gOut('❌ ' + e.message); }
+}
+
+async function gistInfo(){
+  saveGistFields(); if(needTok()) return;
+  if(!gId()){ gOut('還沒有 Gist ID —— 按「推上去」會自動建立一個私密 Gist。'); return; }
+  gOut('查詢中…');
+  try{
+    const res = await gApi('/gists/' + gId());
+    const f = res.files && res.files[GIST_FILE];
+    if(!f){ gOut('❌ 這個 Gist 裡沒有 ' + GIST_FILE); return; }
+    const content = f.truncated ? await (await fetch(f.raw_url)).text() : f.content;
+    const data = JSON.parse(content);
+    const n = (data.qq_transactions || []).length;
+    gOut('雲端：<b>' + n + '</b> 筆 · 存於 ' + (data._meta && data._meta.exported || '未知') +
+         '<br>本機：<b>' + store.tx.length + '</b> 筆' +
+         (n === store.tx.length ? '<br>筆數相同' : '<br>⚠️ 筆數不同，推 / 拉前請確認哪邊才是最新的') +
+         (res.public ? '<br>⚠️ 這個 Gist 是<b>公開</b>的' : ''), n === store.tx.length ? 'ok' : '');
+  }catch(e){ gOut('❌ ' + e.message); }
+}
+
 /* ── 匯出 ── */
 $('#btnExport').addEventListener('click', doExport);
-function doExport(){
-  const data = {
-    _meta:{app:'阿邦記帳2', version:1, exported:today(), count:store.tx.length},
+function buildBackup(){
+  return {
+    _meta:{app:'阿邦記帳2', version:1, exported:today(), savedAt:new Date().toISOString(), count:store.tx.length},
     qq_transactions: store.tx,
     qq_accounts: store.accounts,
     qq_rules: store.rules,
     qq_cards: store.cards,
+    qq_recons: store.recons,
   };
+}
+function applyBackup(data){
+  store.tx = data.qq_transactions || []; migrateTransfers(store.tx);
+  if(data.qq_accounts){ store.accounts = data.qq_accounts; store.saveAcct(); }
+  store.cards = Array.isArray(data.qq_cards) ? data.qq_cards : guessCards(store.accounts);
+  store.saveCards();
+  if(data.qq_rules){ store.rules = data.qq_rules; store.saveRules(); }
+  store.recons = Array.isArray(data.qq_recons) ? data.qq_recons : [];
+  store.saveRecons();
+  store.save();
+}
+
+function doExport(){
+  const data = buildBackup();
   const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
@@ -1697,7 +1826,72 @@ function importIncome(rows, pnlCount){
   go('stats');
 }
 
+/* 增量匯入 —— 信用卡帳單這種「每月加一批」的資料，用取代會洗掉期間新記的帳。
+   去重用 date|amount|desc 而不是 id：帳單轉出來的 id 是產檔時現編的，
+   同一份檔按兩次匯入，id 會不一樣但內容一模一樣，用 id 擋不住。 */
+function importAdd(rows){
+  const key = t => t.date + '|' + t.amount + '|' + (t.desc || '').trim();
+  const seen = new Set(store.tx.map(key));
+  const ids = new Set(store.tx.map(t => t.id));
+  const fresh = [];
+  let dup = 0;
+
+  rows.forEach((r, i) =>{
+    const t = {
+      id: r.id || (Date.now() + i),
+      date: r.date || today(),
+      type: r.type || 'expense',
+      category: r.category || '',
+      desc: (r.desc || '').trim(),
+      amount: Number(r.amount) || 0,
+      account: r.account || '',
+      fixed: !!r.fixed, excluded: !!r.excluded,
+      manual: r.manual !== false, ambiguous: !!r.ambiguous,
+    };
+    if(r.toAccount) t.toAccount = r.toAccount;
+
+    /* 沒給分類就照關鍵字規則自動歸類，別整批落到「其他」 */
+    if(!t.category && t.type === 'expense'){
+      const c = classify(t.desc);
+      if(c.move){ t.type = 'transfer'; t.category = c.cat; t.excluded = true; }
+      else if(c.ambiguous){ t.category = '其他'; t.ambiguous = true; }
+      else { t.category = c.cat || '其他'; t.fixed = guessFixed(t); }
+      t.manual = false;
+    }
+
+    if(seen.has(key(t))){ dup++; return; }
+    seen.add(key(t));
+    while(ids.has(t.id)) t.id++;
+    ids.add(t.id);
+    fresh.push(t);
+  });
+
+  if(!fresh.length){ alert('這 ' + rows.length + ' 筆全部都已經記過了，沒有新增。'); return; }
+
+  /* 退款是沖銷不是收入，要扣掉才對得上帳單金額；搬移與收入不算消費 */
+  const net = fresh.reduce((a,t)=> a + (t.type === 'expense' ? t.amount : t.type === 'refund' ? -t.amount : 0), 0);
+  if(!confirm('加入 ' + fresh.length + ' 筆（消費淨額 ' + fmt(net) + '）到目前的 ' + store.tx.length + ' 筆？\n\n' +
+    '不會覆蓋既有紀錄。' + (dup ? '\n另有 ' + dup + ' 筆日期／金額／店家完全相同，視為重複略過。' : ''))) return;
+
+  fresh.forEach(t => store.tx.push(t));
+  migrateTransfers(store.tx);
+  store.save();
+
+  /* 補進資料裡出現過但清單沒有的帳戶 */
+  const accts = new Set(store.accounts);
+  fresh.forEach(t =>{ if(t.account) accts.add(t.account); });
+  store.accounts = Array.from(accts); store.saveAcct();
+
+  renderAccounts(); renderWallet(); renderCards(); renderBackupBanner(); renderSettings();
+  const ms = allMonths(); if(ms.length) statM = ms[0];
+  toast('已加入 ' + fresh.length + ' 筆' + (dup ? '（' + dup + ' 筆重複略過）' : ''));
+  go('stats');
+}
+
 function doImport(data){
+  /* 增量匯入（每月帳單）—— 跟「還原備份」是兩件事，先判斷免得搞混 */
+  if(Array.isArray(data.qq_add) && data.qq_add.length){ importAdd(data.qq_add); return; }
+
   const own = data.qq_transactions;
   const legacy = data.hj_transactions;
   const raw = own || legacy || (Array.isArray(data) ? data : null);
@@ -1719,12 +1913,7 @@ function doImport(data){
   if(own){
     /* 阿邦記帳2 自己的備份 — 原樣還原 */
     if(!confirm('匯入 ' + raw.length + ' 筆（阿邦記帳2 備份格式）？將取代目前資料。')) return;
-    store.tx = raw; migrateTransfers(store.tx);
-    if(data.qq_accounts) { store.accounts = data.qq_accounts; store.saveAcct(); }
-    store.cards = Array.isArray(data.qq_cards) ? data.qq_cards : guessCards(store.accounts);
-    store.saveCards();
-    if(data.qq_rules) { store.rules = data.qq_rules; store.saveRules(); }
-    store.save(); afterImport(raw.length, 0, 0, 0);
+    applyBackup(data); afterImport(raw.length, 0, 0, 0);
     return;
   }
 
