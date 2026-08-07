@@ -362,6 +362,7 @@ main{
     <div class="typetabs" id="typetabs">
       <button data-type="expense" class="on">支出</button>
       <button data-type="income">收入</button>
+      <button data-type="refund">退款</button>
       <button data-type="transfer">資金搬移</button>
     </div>
 
@@ -516,6 +517,7 @@ const INCOME_CATS = {
   '獎金':     {ic:'🎉', c:'#7BA05B'},
   '投資收益': {ic:'📈', c:'#5B8FA8'},
   '其他收入': {ic:'🔹', c:'#96A08F'},
+  '退款':     {ic:'↩️', c:'#7A9E8C'},
 };
 const MOVE_CATS = {
   '儲值':       {ic:'💳', c:'#A8A29A'},
@@ -643,7 +645,7 @@ function toast(msg){
 function cashIn(t){
   if(t.category === '現金調整') return t.cashDir === 'in';
   if(t.type === 'transfer' && t.category === '現金提款') return true;
-  return t.type === 'income' && t.account === CASH;
+  return (t.type === 'income' || t.type === 'refund') && t.account === CASH;
 }
 function cashOut(t){
   if(t.category === '現金調整') return t.cashDir === 'out';
@@ -660,7 +662,12 @@ function lastCount(){
 }
 
 /* 消費分析用的支出：排除資金搬移 */
-function realExpenses(list){ return list.filter(t => t.type === 'expense' && !t.excluded); }
+/* 退款是「原本那筆花費沒發生」，不是收入 —— 從所屬分類扣掉。
+   找不到原扣款可沖銷的退款請記成收入的「退款」分類，不要用 refund。 */
+function isSpend(t){ return (t.type === 'expense' || t.type === 'refund') && !t.excluded; }
+function signed(t){ return (t.type === 'refund' ? -1 : 1) * (Number(t.amount) || 0); }
+function realExpenses(list){ return list.filter(isSpend); }
+function spendSum(list){ return list.reduce((a,t)=> a + signed(t), 0); }
 function monthTx(m){ return store.tx.filter(t => ym(t.date) === m); }
 function sum(list){ return list.reduce((a,t)=> a + (Number(t.amount)||0), 0); }
 function allMonths(){
@@ -703,7 +710,7 @@ $$('#typetabs button').forEach(b => b.addEventListener('click', ()=>{
 function catsForType(){
   if(entry.type === 'income') return INCOME_CATS;
   if(entry.type === 'transfer') return MOVE_CATS;
-  return EXPENSE_CATS;
+  return EXPENSE_CATS;   /* 退款也是選支出分類 —— 要沖銷哪一類就選哪一類 */
 }
 function renderCatChips(){
   const cats = catsForType();
@@ -820,7 +827,7 @@ function resetEntry(){
 function renderToday(){
   const d = $('#fDate').value || today();
   const list = store.tx.filter(t => t.date === d);
-  const exp = sum(realExpenses(list));
+  const exp = spendSum(realExpenses(list));
   $('#todayBar').innerHTML = list.length
     ? (d === today() ? '今天' : d) + ' 已記 <b>' + list.length + '</b> 筆 · 消費 <b>' + fmt(exp) + '</b>'
     : (d === today() ? '今天' : d) + ' 還沒有紀錄';
@@ -870,7 +877,7 @@ function renderWallet(){
   const lc = lastCount();
   const m = today().slice(0,7);
   const mt = cashTx().filter(t => ym(t.date) === m);
-  const spent = sum(mt.filter(t => t.type === 'expense'));
+  const spent = spendSum(mt.filter(t => t.type === 'expense' || t.type === 'refund'));
   const drew = sum(mt.filter(t => t.type === 'transfer' && t.category === '現金提款'));
   const recent = cashTx().slice(0,6);
 
@@ -1015,7 +1022,7 @@ function renderList(){
 
   $('#listBody').innerHTML = todoTip + Object.keys(groups).sort().reverse().map(m =>{
     const g = groups[m];
-    const exp = sum(realExpenses(g));
+    const exp = spendSum(realExpenses(g));
     return '<div class="mgroup"><div class="mgroup-h"><span>'+ymLabel(m)+'</span><span class="num">消費 '+fmt(exp)+' · '+g.length+' 筆</span></div>' +
       '<div class="txlist">' + g.map(txRow).join('') + '</div></div>';
   }).join('');
@@ -1025,9 +1032,10 @@ function renderList(){
 
 function txRow(t){
   const m = catMeta(t.category);
-  const sign = t.type === 'income' ? '+' : t.type === 'transfer' ? '' : '−';
-  const col = t.type === 'income' ? 'var(--accent)' : t.excluded ? 'var(--muted)' : 'var(--text)';
+  const sign = (t.type === 'income' || t.type === 'refund') ? '+' : t.type === 'transfer' ? '' : '−';
+  const col = (t.type === 'income' || t.type === 'refund') ? 'var(--accent)' : t.excluded ? 'var(--muted)' : 'var(--text)';
   let badges = '';
+  if(t.type === 'refund') badges += '<span class="badge f">退款</span>';
   if(t.fixed) badges += '<span class="badge f">固定</span>';
   if(t.excluded) badges += '<span class="badge">不計入分析</span>';
   if(t.ambiguous) badges += '<span class="badge a">未知用途</span>';
@@ -1052,7 +1060,7 @@ function openEdit(id){
     '<div class="field row2"><div><label>金額</label><input id="eAmt" type="number" value="'+t.amount+'"></div>' +
     '<div><label>日期</label><input id="eDate" type="date" value="'+t.date+'"></div></div>' +
     '<div class="field"><label>類型</label><select id="eType">' +
-      ['expense','income','transfer'].map(v => '<option value="'+v+'"'+(t.type===v?' selected':'')+'>'+({expense:'支出',income:'收入',transfer:'資金搬移'}[v])+'</option>').join('') +
+      ['expense','refund','income','transfer'].map(v => '<option value="'+v+'"'+(t.type===v?' selected':'')+'>'+({expense:'支出',refund:'退款',income:'收入',transfer:'資金搬移'}[v])+'</option>').join('') +
     '</select></div>' +
     '<div class="field"><label>分類</label><select id="eCat">' +
       Object.keys(cats).map(c => '<option'+(t.category===c?' selected':'')+'>'+c+'</option>').join('') +
@@ -1103,7 +1111,7 @@ function renderStats(){
   $('#mLabel').textContent = ymLabel(statM);
   const cur = monthTx(statM);
   const exp = realExpenses(cur);
-  const total = sum(exp);
+  const total = spendSum(exp);
   const body = $('#statsBody');
 
   if(!store.tx.length){
@@ -1116,7 +1124,7 @@ function renderStats(){
   }
 
   /* ── 總覽 ── */
-  const prevTotal = sum(realExpenses(monthTx(shiftMonth(statM,-1))));
+  const prevTotal = spendSum(realExpenses(monthTx(shiftMonth(statM,-1))));
   const delta = prevTotal ? (total - prevTotal) / prevTotal * 100 : null;
   const inc = sum(cur.filter(t => t.type === 'income'));
   const isThisMonth = statM === today().slice(0,7);
@@ -1171,7 +1179,8 @@ function renderStats(){
 
   /* ── 分類佔比 ── */
   const byCat = {};
-  exp.forEach(t =>{ byCat[t.category] = (byCat[t.category]||0) + t.amount; });
+  exp.forEach(t =>{ byCat[t.category] = (byCat[t.category]||0) + signed(t); });
+  Object.keys(byCat).forEach(c =>{ if(byCat[c] <= 0) delete byCat[c]; });   /* 淨額 ≤0 的分類不畫 */
   const cats = Object.keys(byCat).sort((a,b)=> byCat[b] - byCat[a]);
   const counts = {};
   exp.forEach(t =>{ counts[t.category] = (counts[t.category]||0)+1; });
@@ -1196,7 +1205,7 @@ function renderStats(){
 
   /* ── 固定 vs 變動 ── */
   const fx = exp.filter(t => t.fixed), vr = exp.filter(t => !t.fixed);
-  const fxT = sum(fx), vrT = sum(vr);
+  const fxT = spendSum(fx), vrT = spendSum(vr);
   const fxPct = total ? fxT/total*100 : 0;
   html += '<div class="card"><div class="card-t">固定 vs 變動支出</div>' +
     '<div class="fvbar">' +
@@ -1215,7 +1224,7 @@ function renderStats(){
 
   /* ── 6 個月趨勢 ── */
   const ms = []; for(let i=5;i>=0;i--) ms.push(shiftMonth(statM,-i));
-  const vals = ms.map(m => sum(realExpenses(monthTx(m))));
+  const vals = ms.map(m => spendSum(realExpenses(monthTx(m))));
   if(vals.some(v => v > 0)){
     html += '<div class="card"><div class="card-t">近 6 個月趨勢</div>' + lineSVG(ms, vals) + '</div>';
   }
@@ -1338,7 +1347,7 @@ $('#btnReclass').addEventListener('click', ()=>{
 
 /* 將分類規則套到一筆紀錄，回傳是否有變動 */
 function applyClassification(t){
-  if(t.type === 'income') return false;
+  if(t.type === 'income' || t.type === 'refund') return false;   /* 退款不能被改回支出 */
   const before = t.category + '|' + t.excluded;
   const r = classify(t.desc);
   if(r.move){
