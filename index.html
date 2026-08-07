@@ -1393,6 +1393,32 @@ function renderStats(){
       '<div class="bar"><i style="width:'+(byCat[c]/max*100)+'%; background:'+catMeta(c).c+'"></i></div></div>').join('') +
     '</div></div>';
 
+  /* ── 錢從哪裡出去 ── */
+  const byAcct = {}, acctCnt = {};
+  exp.forEach(t =>{
+    const k = t.account || '';
+    byAcct[k] = (byAcct[k] || 0) + signed(t);
+    acctCnt[k] = (acctCnt[k] || 0) + 1;
+  });
+  const accts = Object.keys(byAcct).filter(k => byAcct[k] > 0).sort((a,b)=> byAcct[b] - byAcct[a]);
+  if(accts.length){
+    const amax = byAcct[accts[0]] || 1;
+    const untagged = byAcct[''] || 0;
+    html += '<div class="card"><div class="card-t">錢從哪裡出去</div><div class="rank">' +
+      accts.map((k,i) =>{
+        const avg = byAcct[k] / acctCnt[k];
+        return '<div class="rrow"><div class="rt">' +
+          '<span class="l">'+(k ? esc(k) : '未註明付款方式')+
+          ' <span class="cnt num">'+acctCnt[k]+' 筆 · 平均 '+fmt(avg)+'</span></span>' +
+          '<span class="r num">'+fmt(byAcct[k])+' <span class="cnt">'+(byAcct[k]/total*100).toFixed(0)+'%</span></span></div>' +
+          '<div class="bar"><i style="width:'+(byAcct[k]/amax*100)+'%; background:'+acctColor(k,i)+'"></i></div></div>';
+      }).join('') + '</div>' +
+      (untagged / total > 0.15
+        ? '<div class="hint" style="margin-top:11px">有 <b>'+(untagged/total*100).toFixed(0)+'%</b>（'+fmt(untagged)+'）沒註明付款方式。記帳時順手選一下「帳戶」，這裡才看得出錢實際從哪個口袋出去 —— 也才對得了帳。</div>'
+        : '<div class="hint" style="margin-top:11px">平均單筆金額看得出習慣：小額通常走電子支付，大額走轉帳或刷卡。</div>') +
+      '</div>';
+  }
+
   /* ── 固定 vs 變動 ── */
   const fx = exp.filter(t => t.fixed), vr = exp.filter(t => !t.fixed);
   const fxT = spendSum(fx), vrT = spendSum(vr);
@@ -1421,6 +1447,9 @@ function renderStats(){
 
   body.innerHTML = html;
 }
+
+const ACCT_COLORS = ['#5B8FA8','#C89B4A','#8C7BB0','#7BA05B','#D4886B','#6B9BC8','#B85C7A','#96A08F'];
+function acctColor(name, i){ return name ? ACCT_COLORS[i % ACCT_COLORS.length] : '#6E8175'; }
 
 /* 同名項目合併，避免固定支出清單出現 7 筆 Apple Services */
 function groupByDesc(list){
