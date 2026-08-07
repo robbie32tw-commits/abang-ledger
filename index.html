@@ -244,6 +244,31 @@ main{
 .empty .e1{font-size:34px; margin-bottom:10px}
 .empty .e2{font-size:13.5px; line-height:1.7}
 
+/* ═══════════ 對帳頁 ═══════════ */
+.rcgrid{margin-top:14px; display:flex; flex-direction:column; gap:9px}
+.rcrow{display:grid; grid-template-columns:1fr auto; gap:6px 10px; align-items:center;
+  padding:10px 12px; background:var(--card2); border-radius:var(--r2)}
+.rcn{font-size:14px; font-weight:500}
+.rce{font-size:12px; color:var(--muted); text-align:right; white-space:nowrap}
+.rci{grid-column:1 / -1; padding:8px 10px; font-size:15px}
+.rcd{grid-column:1 / -1; font-size:12px; font-weight:600; min-height:0}
+.rcd:empty{display:none}
+.rcok{color:var(--accent)}
+.rcbad{color:var(--red)}
+.rcmute{color:var(--muted2)}
+.rclist{display:flex; flex-direction:column; gap:12px}
+.rcitem{padding-bottom:11px; border-bottom:1px solid var(--border)}
+.rcitem:last-child{border-bottom:none; padding-bottom:0}
+.rch{display:flex; justify-content:space-between; align-items:baseline; font-size:13.5px; margin-bottom:5px}
+.rch span{font-size:11.5px; font-weight:600}
+.rcl{display:flex; justify-content:space-between; font-size:12.5px; color:var(--muted); padding:1px 0}
+@media (min-width:900px){
+  #page-recon{max-width:720px; margin:0 auto}
+  .rcrow{grid-template-columns:1fr 150px 130px auto}
+  .rci{grid-column:auto}
+  .rcd{grid-column:auto; text-align:right; white-space:nowrap}
+}
+
 /* ═══════════ 設定：帳戶列 ═══════════ */
 .arow{display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--border)}
 .arow:last-child{border-bottom:none}
@@ -253,6 +278,7 @@ main{
 .arow .ax{font-size:12px; color:var(--muted2); padding:5px 8px; border-radius:var(--r1)}
 .arow .ax:hover{color:var(--red)}
 
+/* ═══════════ 對帳頁 ═══════════ */
 /* ═══════════ 設定 ═══════════ */
 .srow{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 0; border-bottom:1px solid var(--border)}
 .srow:last-child{border-bottom:none}
@@ -408,6 +434,10 @@ main{
         <label>日期</label>
         <input type="date" id="fDate">
       </div>
+      <div id="toWrap" style="display:none">
+        <label>轉到哪</label>
+        <select id="fTo"></select>
+      </div>
     </div>
 
     <label class="toggle" id="fixedWrap"><input type="checkbox" id="fFixed"> 這是每月固定支出</label>
@@ -442,6 +472,11 @@ main{
     <button id="mNext">›</button>
   </div>
   <div id="statsBody"></div>
+</section>
+
+<!-- ═══════════ 對帳 ═══════════ -->
+<section class="page" id="page-recon">
+  <div id="reconBody"></div>
 </section>
 
 <!-- ═══════════ 設定 ═══════════ -->
@@ -500,6 +535,7 @@ main{
   <button data-page="add" class="on"><span class="ic">✏️</span>記帳</button>
   <button data-page="list"><span class="ic">📋</span>明細</button>
   <button data-page="stats"><span class="ic">📊</span>分析</button>
+  <button data-page="recon"><span class="ic">⚖️</span>對帳</button>
   <button data-page="settings"><span class="ic">⚙️</span>設定</button>
 </nav>
 
@@ -592,17 +628,19 @@ const DEFAULT_ACCOUNTS = ['Richart 台新','國泰776','中華郵政','遠東商
 /* ═══════════════════════════════════════════
    2. Store
 ═══════════════════════════════════════════ */
-const K = {tx:'qq_transactions', acct:'qq_accounts', rules:'qq_rules', backup:'qq_last_backup', cards:'qq_cards'};
+const K = {tx:'qq_transactions', acct:'qq_accounts', rules:'qq_rules', backup:'qq_last_backup', cards:'qq_cards', recon:'qq_recons'};
 const BACKUP_DAYS = 14;   /* 超過這麼多天沒匯出就提醒 */
 const store = {
-  tx:[], accounts:[], rules:{}, cards:[],
+  tx:[], accounts:[], rules:{}, cards:[], recons:[],
   load(){
     try{ this.tx = JSON.parse(localStorage.getItem(K.tx)) || []; }catch(e){ this.tx = []; }
     try{ this.accounts = JSON.parse(localStorage.getItem(K.acct)) || DEFAULT_ACCOUNTS.slice(); }catch(e){ this.accounts = DEFAULT_ACCOUNTS.slice(); }
     try{ this.rules = JSON.parse(localStorage.getItem(K.rules)) || clone(DEFAULT_RULES); }catch(e){ this.rules = clone(DEFAULT_RULES); }
     try{ this.cards = JSON.parse(localStorage.getItem(K.cards)); }catch(e){ this.cards = null; }
+    try{ this.recons = JSON.parse(localStorage.getItem(K.recon)) || []; }catch(e){ this.recons = []; }
     /* 沒設定過就從帳戶名稱猜，使用者可在設定頁改 */
     if(!Array.isArray(this.cards)) this.cards = guessCards(this.accounts);
+    migrateTransfers(this.tx);
     this.sort();
   },
   sort(){ this.tx.sort((a,b)=> a.date === b.date ? b.id - a.id : (a.date < b.date ? 1 : -1)); },
@@ -610,9 +648,37 @@ const store = {
   saveAcct(){ localStorage.setItem(K.acct, JSON.stringify(this.accounts)); },
   saveRules(){ localStorage.setItem(K.rules, JSON.stringify(this.rules)); },
   saveCards(){ localStorage.setItem(K.cards, JSON.stringify(this.cards)); },
+  saveRecons(){ this.recons.sort((a,b)=> a.date === b.date ? b.id - a.id : (a.date < b.date ? 1 : -1)); localStorage.setItem(K.recon, JSON.stringify(this.recons)); },
 };
 function clone(o){ return JSON.parse(JSON.stringify(o)); }
 function guessCards(accts){ return (accts||[]).filter(a => a.includes('信用卡') || a.includes('卡費')); }
+
+/* 舊資料的搬移只有單邊帳戶，補成「從哪→到哪」，餘額才算得出來。
+   統一語意：account = 錢出去的一方，toAccount = 錢進來的一方。 */
+function migrateTransfers(list){
+  (list || []).forEach(t =>{
+    if(t.type !== 'transfer' || t._mig) return;
+    if(t.category === '現金提款' && !t.toAccount) t.toAccount = CASH;
+    else if(t.category === '現金存入' && !t.account) t.account = CASH;
+    else if((t.category === '信用卡還款' || t.category === '信用卡調整') && !t.toAccount){
+      t.toAccount = t.account || ''; t.account = '';   /* 舊資料把卡記在 account */
+    }
+    t._mig = 1;
+  });
+}
+
+/* 某帳戶在一筆紀錄上的增減（信用卡另走 cardDelta） */
+function acctDelta(t, name){
+  if(!name) return 0;
+  let d = 0;
+  if(t.type === 'expense' && t.account === name) d -= t.amount;
+  if((t.type === 'income' || t.type === 'refund') && t.account === name) d += t.amount;
+  if(t.type === 'transfer'){
+    if(t.account === name) d -= t.amount;
+    if(t.toAccount === name) d += t.amount;
+  }
+  return d;
+}
 
 /* ═══════════════════════════════════════════
    3. 分類判斷
@@ -676,7 +742,14 @@ function cashOut(t){
   return t.type === 'expense' && t.account === CASH;
 }
 function cashDelta(t){ return cashIn(t) ? t.amount : cashOut(t) ? -t.amount : 0; }
-function cashBalance(){ return store.tx.reduce((s,t)=> s + cashDelta(t), 0); }
+function lastReconOf(name){ return store.recons.find(r => r.balances && (name in r.balances)) || null; }
+/* 有對過帳就以最近一次的實際金額為基準，只累加之後的異動 ——
+   這樣錢包卡與對帳頁永遠是同一個數字 */
+function cashBalance(){
+  const r = lastReconOf(CASH);
+  if(r) return r.balances[CASH] + store.tx.filter(t => t.date > r.date).reduce((s,t)=> s + cashDelta(t), 0);
+  return store.tx.reduce((s,t)=> s + cashDelta(t), 0);
+}
 function cashTx(){ return store.tx.filter(t => cashIn(t) || cashOut(t)); }
 function lastCount(){
   const c = store.tx.filter(t => t.cashCount);
@@ -689,18 +762,21 @@ function lastCount(){
    刷卡記在消費日（計入當月消費），繳款只是還錢（不計入消費）—— 兩者都不重複計算。 */
 function isCard(a){ return !!a && store.cards.includes(a); }
 function cardDelta(t){
+  /* 繳款與調整是「錢進到卡片」，記在 toAccount */
+  if(t.type === 'transfer' && isCard(t.toAccount)){
+    if(t.category === '信用卡還款') return -t.amount;
+    if(t.category === '信用卡調整') return t.cardDir === 'up' ? t.amount : -t.amount;
+  }
   if(!isCard(t.account)) return 0;
-  if(t.type === 'expense') return t.amount;                                  // 刷卡 → 欠更多
-  if(t.type === 'refund') return -t.amount;                                  // 退款 → 欠更少
-  if(t.type === 'transfer' && t.category === '信用卡還款') return -t.amount;   // 繳款
-  if(t.type === 'transfer' && t.category === '信用卡調整') return t.cardDir === 'up' ? t.amount : -t.amount;
+  if(t.type === 'expense') return t.amount;    // 刷卡 → 欠更多
+  if(t.type === 'refund') return -t.amount;    // 退款 → 欠更少
   return 0;
 }
-function cardOwed(name){ return store.tx.reduce((s,t)=> s + (t.account === name ? cardDelta(t) : 0), 0); }
+function cardOwed(name){ return store.tx.reduce((s,t)=> s + ((t.account === name || t.toAccount === name) ? cardDelta(t) : 0), 0); }
 function cardTotal(){ return store.cards.reduce((s,c)=> s + cardOwed(c), 0); }
-function cardTx(name){ return store.tx.filter(t => t.account === name && cardDelta(t) !== 0); }
+function cardTx(name){ return store.tx.filter(t => (t.account === name || t.toAccount === name) && cardDelta(t) !== 0); }
 function lastCardCheck(name){
-  const c = store.tx.filter(t => t.cardCheck && t.account === name);
+  const c = store.tx.filter(t => t.cardCheck && (t.account === name || t.toAccount === name));
   if(!c.length) return null;
   return c.slice().sort((a,b)=> a.date === b.date ? b.id - a.id : (a.date < b.date ? 1 : -1))[0];
 }
@@ -729,6 +805,7 @@ function go(p){
   window.scrollTo(0,0);
   if(p === 'list') renderList();
   if(p === 'stats') renderStats();
+  if(p === 'recon') renderRecon();
   if(p === 'settings') renderSettings();
   if(p === 'add'){ renderToday(); renderWallet(); renderCards(); renderBackupBanner(); }
 }
@@ -743,6 +820,8 @@ function setType(tp){
   entry.type = tp;
   $$('#typetabs button').forEach(x => x.classList.toggle('on', x.dataset.type === tp));
   $('#fixedWrap').style.display = tp === 'expense' ? '' : 'none';
+  $('#toWrap').style.display = tp === 'transfer' ? '' : 'none';
+  $('#fAccount').previousElementSibling.textContent = tp === 'transfer' ? '從哪個帳戶' : '帳戶';
 }
 $$('#typetabs button').forEach(b => b.addEventListener('click', ()=>{
   setType(b.dataset.type);
@@ -848,6 +927,7 @@ $('#btnSave').addEventListener('click', ()=>{
     amount: Number(entry.amt),
     category: entry.cat,
     account: $('#fAccount').value,
+    toAccount: entry.type === 'transfer' ? $('#fTo').value : '',
     fixed: entry.type === 'expense' ? $('#fFixed').checked : false,
     excluded: entry.type === 'transfer',
     manual: entry.manual,
@@ -928,14 +1008,14 @@ function renderCards(){
 
   let h = '';
   if(never){
-    h += '<div class="wl-warn">💡 <b>還沒對過帳。</b>未繳金額是用「刷卡總額 − 繳款總額」推算的，只要有一次繳款忘了記，這個數字就會偏高。按「對帳」輸入帳單上的實際未繳金額就會校正。</div>';
+    h += '<div class="wl-warn">💡 <b>還沒對過帳。</b>未繳金額是用「刷卡總額 − 繳款總額」推算的，只要有一次繳款忘了記就會偏高。到<b>對帳</b>頁輸入帳單上的實際未繳金額就會校正。</div>';
   } else if(owed < 0){
-    h += '<div class="wl-warn">⚠️ <b>算出來是負的</b> —— 表示繳款記得比刷卡多，可能有刷卡漏記。對帳一次就會修正。</div>';
+    h += '<div class="wl-warn">⚠️ <b>算出來是負的</b> —— 表示繳款記得比刷卡多，可能有刷卡漏記。到<b>對帳</b>頁校正一次即可。</div>';
   }
   h += '<div class="wl-stats">' +
     '<div class="s"><div class="k">本月刷卡</div><div class="v num" style="color:var(--red)">'+fmt(sum(swiped))+'</div></div>' +
     '<div class="s"><div class="k">本月已繳</div><div class="v num">'+fmt(sum(paid))+'</div></div></div>';
-  h += '<div class="wl-acts"><button class="p" id="ccPay">記一筆繳款</button><button id="ccCheck">對帳</button></div>';
+  h += '<div class="wl-acts"><button class="p" id="ccPay">記一筆繳款</button><button id="ccCheck">去對帳</button></div>';
 
   if(store.cards.length > 1){
     h += '<div class="wl-list">' + store.cards.map(c =>{
@@ -955,7 +1035,7 @@ function renderCards(){
   h += '<div class="hint" style="margin-top:10px">刷卡消費記在<b>消費日</b>（算當月花費），繳卡費記成<b>信用卡還款</b>（只是還錢，不算消費）。兩邊都記也不會重複計算。</div>';
   $('#ccBody').innerHTML = h;
   $('#ccPay').onclick = openCardPay;
-  $('#ccCheck').onclick = openCardCheck;
+  $('#ccCheck').onclick = ()=> go('recon');
 }
 
 function cardPicker(id){
@@ -979,48 +1059,9 @@ function openCardPay(){
     if(!(v > 0)){ alert('請填金額'); return; }
     const card = $('#cpCard').value;
     store.tx.push({id:Date.now(), date:$('#cpDate').value || today(), type:'transfer', category:'信用卡還款',
-      desc:'繳 ' + card, amount:v, account:card,
+      desc:'繳 ' + card, amount:v, account:'', toAccount:card,
       excluded:true, fixed:false, manual:true, ambiguous:false});
     store.save(); closeModal(); renderCards(); renderToday(); toast('已記錄繳款 ' + fmt(v));
-  };
-}
-
-function openCardCheck(){
-  $('#sheet').innerHTML =
-    '<div class="sh"><h3>信用卡對帳</h3><button class="btn" id="mClose">關閉</button></div>' +
-    '<div class="hint">打開網銀或帳單，把目前的<b>未繳總額</b>填進來。系統會補一筆調整，讓推算值等於實際值。</div>' +
-    cardPicker('chCard') +
-    '<div class="field"><label>目前推算未繳</label><div class="num" id="chCalc" style="font-size:26px; font-weight:600">—</div></div>' +
-    '<div class="field"><label>帳單上的實際未繳</label><input type="number" id="chActual" inputmode="numeric"></div>' +
-    '<div class="field"><label>日期</label><input type="date" id="chDate" value="'+today()+'"></div>' +
-    '<div id="chPreview"></div>' +
-    '<button class="btn p" id="chSave" style="width:100%; padding:14px; margin-top:14px">確認對帳</button>';
-  $('#modal').classList.add('on');
-  $('#mClose').onclick = closeModal;
-  const calc = ()=> cardOwed($('#chCard').value);
-  const show = ()=>{
-    $('#chCalc').textContent = fmt(calc());
-    const a = $('#chActual').value;
-    if(a === ''){ $('#chPreview').innerHTML = ''; return; }
-    const diff = Number(a) - calc();
-    let msg;
-    if(diff === 0) msg = '完全對得上 ✓ 不會產生調整紀錄。';
-    else if(diff < 0) msg = '推算比實際多 <b>'+fmt(-diff)+'</b> —— 通常是<b>繳款忘了記</b>。會補一筆調整把欠款調降，不影響消費統計。';
-    else msg = '推算比實際少 <b>'+fmt(diff)+'</b> —— 通常是<b>刷卡忘了記</b>。會補一筆調整把欠款調升。注意這筆<b>不會</b>計入消費分類，因為不知道買了什麼。';
-    $('#chPreview').innerHTML = '<div class="wl-warn">'+msg+'</div>';
-  };
-  show();
-  $('#chActual').addEventListener('input', show);
-  if(store.cards.length > 1) $('#chCard').addEventListener('change', show);
-  $('#chSave').onclick = ()=>{
-    const a = $('#chActual').value;
-    if(a === ''){ alert('請填帳單上的未繳金額'); return; }
-    const card = $('#chCard').value, diff = Number(a) - cardOwed(card);
-    store.tx.push({id:Date.now(), date:$('#chDate').value || today(), type:'transfer', category:'信用卡調整',
-      cardDir: diff >= 0 ? 'up' : 'down', amount:Math.abs(diff),
-      desc:'信用卡對帳' + (diff ? (diff > 0 ? '（調升）' : '（調降）') : '（相符）'),
-      account:card, cardCheck:true, excluded:true, fixed:false, manual:true, ambiguous:false});
-    store.save(); closeModal(); renderCards(); toast('對帳完成，未繳 ' + fmt(Number(a)));
   };
 }
 
@@ -1048,15 +1089,16 @@ function renderWallet(){
 
   let h = '';
   if(bal < 0){
-    h += '<div class="wl-warn">⚠️ <b>餘額是負的</b> —— 表示有領錢或收現金沒記到。按「盤點」數一下實際金額就會修正。</div>';
+    h += '<div class="wl-warn">⚠️ <b>餘額是負的</b> —— 表示有領錢或收現金沒記到。到<b>對帳</b>頁數一次錢就會修正。</div>';
   } else if(!lc){
-    h += '<div class="wl-warn">💡 <b>還沒盤點過。</b>目前餘額是從流水帳推算的，跟錢包裡的實際金額可能差很多（尤其剛匯入舊資料之後）。數一次錢，之後才會準。</div>';
+    h += '<div class="wl-warn">💡 <b>還沒對過帳。</b>目前餘額是從流水帳推算的，跟錢包裡的實際金額可能差很多。到<b>對帳</b>頁數一次錢，之後才會準。</div>';
   }
   h += '<div class="wl-stats">' +
     '<div class="s"><div class="k">本月現金消費</div><div class="v num" style="color:var(--red)">'+fmt(spent)+'</div></div>' +
     '<div class="s"><div class="k">本月領現</div><div class="v num">'+fmt(drew)+'</div></div></div>';
-  h += '<div class="wl-acts"><button class="p" id="wlCount">盤點</button><button id="wlDeposit">存回銀行</button></div>';
-  if(lc) h += '<div class="hint" style="margin-top:8px">上次盤點：'+lc.date+'</div>';
+  h += '<div class="wl-acts"><button class="p" id="wlCount">去對帳</button><button id="wlDeposit">存回銀行</button></div>';
+  const lr = lastReconOf(CASH);
+  if(lr) h += '<div class="hint" style="margin-top:8px">上次對帳：'+lr.date+'</div>';
 
   if(recent.length){
     h += '<div class="wl-list">' + recent.map(t =>{
@@ -1069,54 +1111,8 @@ function renderWallet(){
     h += '<div class="hint" style="margin-top:12px">還沒有現金進出紀錄。記帳時把「帳戶」選成 <b>現金</b>，這裡就會扣。</div>';
   }
   $('#wlBody').innerHTML = h;
-  $('#wlCount').onclick = openCashCount;
+  $('#wlCount').onclick = ()=> go('recon');
   $('#wlDeposit').onclick = openCashDeposit;
-}
-
-function openCashCount(){
-  const computed = cashBalance();
-  const first = !store.tx.some(t => t.cashCount);
-  $('#sheet').innerHTML =
-    '<div class="sh"><h3>現金盤點</h3><button class="btn" id="mClose">關閉</button></div>' +
-    '<div class="hint">數一下錢包裡實際有多少現金填進去。系統會補一筆差額，讓帳面等於實際。</div>' +
-    '<div class="field"><label>系統推算餘額</label><div class="num" style="font-size:26px; font-weight:600">'+fmt(computed)+'</div></div>' +
-    '<div class="field"><label>實際數到的金額</label><input type="number" id="ccActual" inputmode="numeric" placeholder="例：850"></div>' +
-    '<div class="field"><label>日期</label><input type="date" id="ccDate" value="'+today()+'"></div>' +
-    '<div id="ccPreview"></div>' +
-    '<button class="btn p" id="ccSave" style="width:100%; padding:14px; margin-top:14px">確認盤點</button>';
-  $('#modal').classList.add('on');
-  $('#mClose').onclick = closeModal;
-
-  $('#ccActual').addEventListener('input', ()=>{
-    const a = $('#ccActual').value;
-    if(a === ''){ $('#ccPreview').innerHTML = ''; return; }
-    const diff = Number(a) - computed;
-    let msg;
-    if(diff === 0) msg = '完全對得上 ✓ 不會產生調整紀錄。';
-    else if(diff > 0) msg = '多了 <b>'+fmt(diff)+'</b>，表示有領錢或收現金忘了記。會補一筆<b>現金調整</b>，不算消費。';
-    else if(first) msg = '少了 <b>'+fmt(-diff)+'</b>。這是第一次盤點，會記成<b>期初調整、不算消費</b> —— 匯入的舊提款紀錄本來就沒有對應的現金支出，不該算在這個月頭上。';
-    else msg = '少了 <b>'+fmt(-diff)+'</b>，會補一筆<b>現金支出</b>並標記「未知用途」，計入總消費。';
-    $('#ccPreview').innerHTML = '<div class="wl-warn">'+msg+'</div>';
-  });
-
-  $('#ccSave').onclick = ()=>{
-    const a = $('#ccActual').value;
-    if(a === ''){ alert('請填實際數到的金額'); return; }
-    const diff = Number(a) - computed;
-    const base = {id:Date.now(), date:$('#ccDate').value || today(), account:CASH, cashCount:true, manual:true, fixed:false};
-    if(diff >= 0){
-      store.tx.push(Object.assign({}, base, {type:'transfer', category:'現金調整', cashDir:'in',
-        amount:diff, desc: diff ? '現金盤點（多出）' : '現金盤點（相符）', excluded:true, ambiguous:false}));
-    } else if(first){
-      store.tx.push(Object.assign({}, base, {type:'transfer', category:'現金調整', cashDir:'out',
-        amount:-diff, desc:'現金期初調整', excluded:true, ambiguous:false}));
-    } else {
-      store.tx.push(Object.assign({}, base, {type:'expense', category:'其他',
-        amount:-diff, desc:'現金盤點差額', excluded:false, ambiguous:true}));
-    }
-    store.save(); closeModal(); renderWallet(); renderToday();
-    toast('盤點完成，餘額 ' + fmt(Number(a)));
-  };
 }
 
 function openCashDeposit(){
@@ -1142,9 +1138,12 @@ function openCashDeposit(){
 }
 
 function renderAccounts(){
-  const cur = $('#fAccount').value;
-  $('#fAccount').innerHTML = store.accounts.map(a => '<option>'+esc(a)+'</option>').join('');
+  const cur = $('#fAccount').value, curT = $('#fTo').value;
+  const opts = store.accounts.map(a => '<option>'+esc(a)+'</option>').join('');
+  $('#fAccount').innerHTML = opts;
+  $('#fTo').innerHTML = opts;
   if(cur && store.accounts.includes(cur)) $('#fAccount').value = cur;
+  if(curT && store.accounts.includes(curT)) $('#fTo').value = curT;
 }
 function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
@@ -1230,9 +1229,14 @@ function openEdit(id){
     '<div class="field"><label>分類</label><select id="eCat">' +
       Object.keys(cats).map(c => '<option'+(t.category===c?' selected':'')+'>'+c+'</option>').join('') +
     '</select></div>' +
-    '<div class="field"><label>帳戶</label><select id="eAcct">' +
+    '<div class="field"><label>'+(t.type==='transfer'?'從哪個帳戶':'帳戶')+'</label><select id="eAcct">' +
+      '<option value="">(未指定)</option>' +
       store.accounts.map(a => '<option'+(t.account===a?' selected':'')+'>'+esc(a)+'</option>').join('') +
     '</select></div>' +
+    (t.type==='transfer' ? '<div class="field"><label>轉到哪</label><select id="eTo">' +
+      '<option value="">(未指定)</option>' +
+      store.accounts.map(a => '<option'+(t.toAccount===a?' selected':'')+'>'+esc(a)+'</option>').join('') +
+    '</select></div>' : '') +
     '<label class="toggle"><input type="checkbox" id="eFixed"'+(t.fixed?' checked':'')+'> 每月固定支出</label>' +
     '<label class="toggle"><input type="checkbox" id="eExcl"'+(t.excluded?' checked':'')+'> 不計入消費分析（資金搬移）</label>' +
     '<div style="display:flex; gap:8px; margin-top:16px">' +
@@ -1254,6 +1258,7 @@ function openEdit(id){
     t.type = $('#eType').value;
     t.category = $('#eCat').value;
     t.account = $('#eAcct').value;
+    if($('#eTo')) t.toAccount = $('#eTo').value;
     t.fixed = $('#eFixed').checked;
     t.excluded = $('#eExcl').checked;
     t.manual = true;
@@ -1465,6 +1470,91 @@ function lineSVG(labels, vals){
 /* ═══════════════════════════════════════════
    9. 設定頁
 ═══════════════════════════════════════════ */
+function renderRecon(){
+  const last = store.recons[0] || null;
+  const days = last ? daysSince(last.date) : null;
+  const rows = store.accounts.map(a =>{
+    const card = isCard(a);
+    const base = last && last.balances && (a in last.balances) ? last.balances[a] : null;
+    let expect = null;
+    if(card) expect = cardOwed(a);
+    else if(base !== null){
+      expect = base + store.tx.filter(t => t.date > last.date).reduce((s,t)=> s + acctDelta(t,a), 0);
+    }
+    return {name:a, card, expect};
+  });
+
+  let h = '<div class="card"><div class="card-t">對帳 <span class="num" style="font-weight:400">'+
+    (last ? '上次 '+last.date+'（'+days+' 天前）' : '尚未對帳過')+'</span></div>' +
+    '<div class="hint">打開網銀 / 數錢包，把<b>現在的實際金額</b>填進去。系統會比對紀錄推算的數字，差額補一筆調整。</div>' +
+    (last ? '' : '<div class="wl-warn" style="margin-top:10px">💡 <b>第一次對帳只是建立基準線</b>，不會產生任何調整，也不會影響既有統計。從第二次開始才抓得出偏差。</div>') +
+    '<div class="field"><label>對帳日期</label><input type="date" id="rcDate" value="'+today()+'"></div>' +
+    '<div class="rcgrid">' + rows.map((r,i) =>
+      '<div class="rcrow"><div class="rcn">'+esc(r.name)+(r.card?'<span class="badge">信用卡</span>':'')+'</div>' +
+      '<div class="rce">'+(r.expect === null ? '<span class="rcmute">無基準</span>' : (r.card?'應欠 ':'應有 ')+fmt(r.expect))+'</div>' +
+      '<input type="number" inputmode="numeric" class="rci" data-a="'+esc(r.name)+'" data-e="'+(r.expect===null?'':r.expect)+'" placeholder="'+(r.card?'帳單未繳':'實際餘額')+'">' +
+      '<div class="rcd" data-d="'+esc(r.name)+'"></div></div>').join('') +
+    '</div>' +
+    '<div class="hint" style="margin-top:10px">留白的帳戶會跳過，不會被記錄也不會產生調整。</div>' +
+    '<button class="btn p" id="rcSave" style="width:100%; padding:14px; margin-top:12px">完成對帳</button></div>';
+
+  if(store.recons.length){
+    h += '<div class="card"><div class="card-t">對帳紀錄</div><div class="rclist">' +
+      store.recons.slice(0,8).map(r =>{
+        const diffs = Object.keys(r.diffs || {}).filter(k => r.diffs[k]);
+        return '<div class="rcitem"><div class="rch"><b>'+r.date+'</b>' +
+          (diffs.length ? '<span class="rcbad">'+diffs.length+' 個帳戶有偏差</span>' : '<span class="rcok">完全相符 ✓</span>')+'</div>' +
+          Object.keys(r.balances).map(k =>
+            '<div class="rcl"><span>'+esc(k)+'</span><span class="num">'+fmt(r.balances[k])+
+            ((r.diffs && r.diffs[k]) ? ' <span class="'+(r.diffs[k]<0?'rcbad':'rcok')+'">'+(r.diffs[k]>0?'+':'')+fmt(r.diffs[k])+'</span>' : '')+
+            '</span></div>').join('') + '</div>';
+      }).join('') + '</div></div>';
+  }
+  $('#reconBody').innerHTML = h;
+
+  $$('.rci').forEach(inp => inp.addEventListener('input', ()=>{
+    const box = document.querySelector('[data-d="'+inp.dataset.a+'"]');
+    const e = inp.dataset.e;
+    if(inp.value === '' || e === ''){ box.textContent = ''; box.className = 'rcd'; return; }
+    const d = Number(inp.value) - Number(e);
+    box.textContent = d === 0 ? '相符' : (d > 0 ? '+' : '') + fmt(d);
+    box.className = 'rcd ' + (d === 0 ? 'rcok' : 'rcbad');
+  }));
+
+  $('#rcSave').onclick = ()=>{
+    const date = $('#rcDate').value || today();
+    const balances = {}, diffs = {};
+    let adj = 0;
+    $$('.rci').forEach(inp =>{
+      if(inp.value === '') return;
+      const a = inp.dataset.a, actual = Number(inp.value);
+      balances[a] = actual;
+      if(inp.dataset.e === '') return;               /* 沒基準 → 只記錄，不算偏差 */
+      const d = actual - Number(inp.dataset.e);
+      diffs[a] = d;
+      if(!d) return;
+      adj++;
+      const base = {id:Date.now()+adj, date, manual:true, fixed:false, ambiguous:false};
+      if(isCard(a)){
+        store.tx.push(Object.assign({}, base, {type:'transfer', category:'信用卡調整',
+          cardDir: d > 0 ? 'up' : 'down', amount:Math.abs(d),
+          desc:'對帳調整（'+a+'）', account:'', toAccount:a, excluded:true, cardCheck:true}));
+      } else if(d < 0){
+        store.tx.push(Object.assign({}, base, {type:'expense', category:'其他', amount:-d,
+          desc:'對帳差額（'+a+'）', account:a, excluded:false, ambiguous:true}));
+      } else {
+        store.tx.push(Object.assign({}, base, {type:'income', category:'其他收入', amount:d,
+          desc:'對帳差額（'+a+'）', account:a, excluded:false}));
+      }
+    });
+    if(!Object.keys(balances).length){ alert('至少填一個帳戶'); return; }
+    store.recons.unshift({id:Date.now(), date, balances, diffs});
+    store.saveRecons(); store.save();
+    renderRecon(); renderWallet(); renderCards();
+    toast(adj ? '對帳完成，'+adj+' 個帳戶有偏差' : '對帳完成，全部相符');
+  };
+}
+
 function renderSettings(){
   const last = lastBackup(), days = daysSince(last);
   let st = '目前共 ' + store.tx.length + ' 筆紀錄 · ';
@@ -1629,7 +1719,7 @@ function doImport(data){
   if(own){
     /* 阿邦記帳2 自己的備份 — 原樣還原 */
     if(!confirm('匯入 ' + raw.length + ' 筆（阿邦記帳2 備份格式）？將取代目前資料。')) return;
-    store.tx = raw;
+    store.tx = raw; migrateTransfers(store.tx);
     if(data.qq_accounts) { store.accounts = data.qq_accounts; store.saveAcct(); }
     store.cards = Array.isArray(data.qq_cards) ? data.qq_cards : guessCards(store.accounts);
     store.saveCards();
@@ -1686,6 +1776,7 @@ function doImport(data){
     out.push(t);
   });
 
+  migrateTransfers(out);
   store.tx = out; store.save();
 
   /* 補進資料裡出現過但清單沒有的帳戶 */
