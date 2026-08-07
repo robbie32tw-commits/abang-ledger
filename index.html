@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#12211A">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -193,6 +193,8 @@ main{
 .tx .mid{flex:1; min-width:0; display:flex; flex-direction:column}
 .tx .d1{display:block; font-size:14px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .tx .d2{display:block; font-size:11.5px; color:var(--muted2); margin-top:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.tx .d2 span + span::before{content:' · '}
+.tx .d2 .m-acct:empty{display:none}
 .tx .amt{font-size:15px; font-weight:600; white-space:nowrap}
 .tx.ex{opacity:.5}
 .tx.ex .amt{font-weight:500}
@@ -359,8 +361,19 @@ main{
   #statsBody > .card{margin-bottom:0}
   #statsBody > .card.wide{grid-column:1 / -1}
 
-  /* 流水帳與設定不需要拉滿寬 */
-  #page-list, #page-settings{max-width:880px; margin:0 auto}
+  /* 流水帳表格化 —— 筆電上要能快速掃視，兩行式的行高太浪費 */
+  #page-list{max-width:1080px; margin:0 auto}
+  #page-settings{max-width:880px; margin:0 auto}
+  .tx{grid-template-columns:26px 1fr 58px 104px 96px 116px; display:grid; align-items:center;
+      gap:0 12px; padding:8px 14px}
+  .tx .mid, .tx .d2{display:contents}
+  .tx .d1{font-size:13.5px}
+  .tx .d2 span{font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .tx .d2 span + span::before{content:none}          /* 分隔點只在手機用 */
+  .tx .d2 .m-date{font-variant-numeric:tabular-nums; color:var(--muted2)}
+  .tx .amt{font-size:14px; text-align:right}
+  .tx .dot{width:24px; height:24px; font-size:12px}
+  .mgroup-h{padding:0 14px 6px}
 }
 
 /* ── 有滑鼠才給 hover 回饋 ── */
@@ -966,6 +979,7 @@ function resetEntry(){
   $('#fFixed').checked = false; delete $('#fFixed').dataset.touched;
   $('#autoTag').innerHTML = '';
   renderCatChips(); renderWarn(); updateSave(); renderToday(); renderWallet(); renderCards(); renderBackupBanner();
+  if(getComputedStyle($('#keypad')).display === 'none') $('#fDesc').focus();
 }
 
 function renderToday(){
@@ -1226,7 +1240,9 @@ function txRow(t){
   return '<button class="tx'+(t.excluded?' ex':'')+'" data-id="'+t.id+'">' +
     '<span class="dot" style="background:'+m.c+'22">'+m.ic+'</span>' +
     '<span class="mid"><span class="d1">'+esc(t.desc||'(無說明)')+badges+'</span>' +
-    '<span class="d2">'+t.date.slice(5)+' · '+esc(t.category||'—')+(t.account?' · '+esc(t.account):'')+'</span></span>' +
+    '<span class="d2"><span class="m-date">'+t.date.slice(5)+'</span>' +
+    '<span class="m-cat">'+esc(t.category||'—')+'</span>' +
+    '<span class="m-acct">'+esc(t.account||'')+'</span></span></span>' +
     '<span class="amt num" style="color:'+col+'">'+sign+fmt(t.amount)+'</span></button>';
 }
 
